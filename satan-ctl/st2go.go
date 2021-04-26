@@ -4,8 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"os/exec"
 	"path"
-	"regexp"
 	"strings"
 )
 
@@ -41,6 +41,7 @@ func (c *St2GoCommand) Exec() {
 
 	var psrList []*stProtoParser
 	for _, filePath := range fileList {
+		fmt.Printf("parsing %v...\n", path.Base(filePath))
 		psr, err := parseStProtoFile(filePath)
 		if err != nil {
 			fmt.Println(err)
@@ -58,181 +59,318 @@ func (c *St2GoCommand) Exec() {
 	}
 
 	for _, psr := range psrList {
-		psr.toGoFile()
-	}
-}
-
-var regStruct = regexp.MustCompile(`(?U)[ \t]*struct[ \t]+(?P<structName>[a-zA-Z_][0-9a-zA-Z_]*)[ \t]*{(?P<structCtx>(.|[\n])*)}`)
-var regStructField = regexp.MustCompile(
-	"^[ \t]*(?P<fieldName>[a-zA-Z_][0-9a-zA-Z_]*)" +
-		"[ \t]+(?P<fieldType>[a-zA-Z0-9]+)" +
-		"(?P<fieldFilter>[ \t]+[a-zA-Z0-9,() \t]*)?" +
-		"(?P<fieldComment>[ \t]*//[ \t]*.*)?$",
-)
-
-type st2goError struct {
-	errMsg string
-}
-
-func (e *st2goError) Error() string {
-	return e.errMsg
-}
-func newSt2goError(errMsg string) *st2goError {
-	return &st2goError{errMsg: errMsg}
-}
-
-type stProtocolType byte
-
-const (
-	Unknown stProtocolType = iota
-	Byte
-	Bool
-	Int
-	Long
-	Float
-	Double
-	String
-	List
-	Map
-	Struct
-)
-
-var StBaseTypeMap = map[string]stProtocolType{
-	"byte":  Byte,
-	"bool":  Bool,
-	"int":  Int,
-	"long":  Long,
-	"float":  Float,
-	"double":  Double,
-	"string":  String,
-}
-
-type stProtoFieldFilter interface{}
-
-type stProtoField struct {
-	name         string
-	dataType     stProtocolType
-	subDataTypes []stProtocolType
-	fieldFilters []stProtoFieldFilter
-}
-
-type stProtoStruct struct {
-	name      string
-	comment   string
-	fieldList []*stProtoField
-}
-
-type stProtoFunc struct {
-	name    string
-	comment string
-	req     *stProtoStruct
-	rsp     *stProtoStruct
-}
-
-type stProtoParser struct {
-	directory  string
-	serverName string
-	fileText   string
-	structMap  map[string]*stProtoStruct
-	funcList   []*stProtoFunc
-}
-
-func (psr *stProtoParser) parseStruct() error {
-	regStructRes := regStruct.FindAllStringSubmatch(psr.fileText, -1)
-	for _, structRes := range regStructRes {
-		if len(structRes) < 3 {
-			return newSt2goError("parse struct error")
-		}
-
-		structName := strings.TrimSpace(structRes[1])
-		structCtx := strings.TrimSpace(structRes[2])
-
-		if structCtx == "" {
-			return newSt2goError(fmt.Sprintf("struct %v is empty, it must have at least one field", structName))
-		}
-
-		if psr.structMap[structName] != nil {
-			return newSt2goError(fmt.Sprintf("struct %v is duplicated", structName))
-		}
-
-		ps := &stProtoStruct{name: structName, fieldList: make([]*stProtoField, 0)}
-		fmt.Println(structName, ">>>>>>>>>>>>>>>>>>>>>>>>")
-		for _, sFieldLine := range strings.Split(structCtx, "\n") {
-			sFieldLine = strings.TrimSpace(sFieldLine)
-			regStructFieldRes := regStructField.FindStringSubmatch(sFieldLine)
-			if len(regStructFieldRes) < 5 {
-				return newSt2goError(fmt.Sprintf("line \"%v\" parse error", sFieldLine))
-			} else {
-				pf := &stProtoField{
-					name: regStructFieldRes[1],
-
-				}
-				ps.fieldList = append(ps.fieldList, pf)
-
-				ps.fieldList
-				psr.structMap[structName] = ps
-				fmt.Printf("<%v>\t", regStructFieldRes[1])
-				fmt.Printf("<%v>\t", regStructFieldRes[2])
-				fmt.Printf("<%v>\t", regStructFieldRes[3])
-				fmt.Printf("<%v>\n", regStructFieldRes[4])
-			}
-		}
-		psr.structMap[structName] = ps
-	}
-	return nil
-}
-
-func (psr *stProtoParser) parseFunc() error {
-	return nil
-}
-
-func (psr *stProtoParser) toGoFile() {
-
-}
-
-func getStProtocolType(s string) (dts []stProtocolType, err error) {
-	if s=="" {
-		err = newSt2goError("getStProtocolType error")
-	} else if dt := StBaseTypeMap[s]; dt != Unknown {
-		dts = append(dts, dt)
-	} else if strings.Index(s, "[]") == 0 {
-		subDts, err := getStProtocolType(s[2:])
-		if err != nil {
+		if err := psr.toGoFile(); err != nil {
+			fmt.Println(err)
 			return
 		}
-		dts = append(dts, List)
-		dts = append(dts, subDts...)
-	} else if
-	return
+	}
+
+	fmt.Println("st2go finish >>>>>>>>>>>>>>>>>>>>>")
 }
 
-func getStProtoFilesPath(directory string) (fileList []string, err error) {
-	fileInfoList, err := ioutil.ReadDir(directory)
-	if err != nil {
-		return nil, err
-	}
-
-	for i := range fileInfoList {
-		if !fileInfoList[i].IsDir() {
-			fileList = append(fileList, path.Join(directory, fileInfoList[i].Name()))
-		}
-	}
-	return
+var toGoDataTypeStrMap = map[stProtocolType]string{
+	Byte:   "Byte",
+	Bool:   "Bool",
+	Int:    "Int",
+	Long:   "Long",
+	Float:  "Float",
+	Double: "Double",
+	String: "String",
+	List:   "List",
+	Map:    "Map",
+	Struct: "Struct",
 }
 
-func parseStProtoFile(filePath string) (*stProtoParser, error) {
-	fileName := path.Base(filePath)
-	buff, err := ioutil.ReadFile(filePath)
-	if err != nil {
-		return nil, err
+var toGoDataTypeGoMap = map[stProtocolType]string{
+	Byte:   "byte",
+	Bool:   "bool",
+	Int:    "int",
+	Long:   "int64",
+	Float:  "float32",
+	Double: "float64",
+	String: "string",
+	List:   "[]%v",
+	Map:    "map[%v]%v",
+	Struct: "*%v",
+}
+
+var toGoDefaultValueMap = map[stProtocolType]string{
+	Byte:   "byte(0)",
+	Bool:   "false",
+	Int:    "0",
+	Long:   "int64(0)",
+	Float:  "float32(0)",
+	Double: "float64(0)",
+	String: "\"\"",
+	List:   "make(%v, 0)",
+	Map:    "make(%v)",
+	Struct: "nil",
+}
+
+func (psr *stProtoParser) toGoFile() error {
+	psr.toGoWriteHeader()
+	for _, st := range psr.structMap {
+		psr.tgtFileText += st.toGoWriteStruct()
+		psr.tgtFileText += st.toGoWriteFuncWriteDataBuf()
+		psr.tgtFileText += st.toGoWriteFuncReadDataBuf()
+		psr.tgtFileText += st.toGoWriteFuncNewPerson()
+		psr.tgtFileText += "\n"
 	}
 
-	psr := &stProtoParser{
-		directory:  path.Dir(filePath),
-		serverName: strings.TrimSuffix(fileName, path.Ext(fileName)),
-		fileText:   string(buff),
-		structMap: 	make(map[string]*stProtoStruct),
-		funcList:   make([]*stProtoFunc, 0),
+	filePath := path.Join(psr.directory, fmt.Sprintf("%v.stproto.go", psr.servantName))
+	if err := ioutil.WriteFile(filePath, []byte(psr.tgtFileText), 0666); err != nil {
+		return err
 	}
-	return psr, nil
+	cmd := exec.Command("go", "fmt", filePath)
+	_ = cmd.Run()
+	return nil
+}
+
+func (psr *stProtoParser) toGoWriteHeader() {
+	psr.tgtFileText += fmt.Sprintf("package %v\n\n", psr.serverName)
+
+	psr.tgtFileText += "import (\n"
+	psr.tgtFileText += "\t\"satanGo/satan/errors\"\n"
+	psr.tgtFileText += "\t\"satanGo/satan/protocol\"\n"
+	psr.tgtFileText += ")\n\n"
+}
+
+func (ps *stProtoStruct) toGoWriteStruct() string {
+	var ret string
+	ret += fmt.Sprintf("type %v struct {\n", upperFirstChar(ps.name))
+	for _, pf := range ps.fieldList {
+		ret += fmt.Sprintf(
+			"\t%v %v `json:\"%v\"`\n",
+			upperFirstChar(pf.name),
+			pf.toGoGetDataTypeStr(pf.dataType, pf.subDataTypes),
+			pf.name,
+		)
+	}
+	ret += "}\n"
+
+	return ret
+}
+
+func (ps *stProtoStruct) toGoWriteFuncWriteDataBuf() string {
+	var ret string
+	ret += fmt.Sprintf("func (st *%v) WriteDataBuf(bf *protocol.StBuffer) error {\n", ps.name)
+	// length
+	ret += fmt.Sprintf("\tif err := bf.WriteStructLength(%v); err != nil {\n", len(ps.fieldList))
+	ret += "\t\treturn err"
+	ret += "\t}\n\n"
+
+	// field
+	for tg, pf := range ps.fieldList {
+		// field tag
+		ret += fmt.Sprintf("\tif err := bf.WriteTag(%v); err != nil  {\n", tg)
+		ret += "\t\treturn err\n"
+		ret += "\t}\n"
+
+		// field datatype
+		ret += fmt.Sprintf("\tif err := bf.WriteDataType(protocol.%v); err != nil {\n", toGoDataTypeStrMap[pf.dataType])
+		ret += "\t\treturn err\n"
+		ret += "\t}\n"
+
+		// field dataBuf
+		ret += pf.toGoWriteDataBuf(1, pf.dataType, pf.subDataTypes, "st."+upperFirstChar(pf.name))
+		ret += "\n"
+	}
+
+	ret += "\treturn nil\n"
+	ret += "}\n"
+	return ret
+}
+func (ps *stProtoStruct) toGoWriteFuncReadDataBuf() string {
+	var ret string
+	ret += fmt.Sprintf("func (st *%v) ReadDataBuf(bf *protocol.StBuffer) error {\n", ps.name)
+	// length
+	ret += "\tl, err := bf.ReadStructLength()\n"
+	ret += "\tif err != nil {\n"
+	ret += "\t\treturn err\n"
+	ret += "\t}\n\n"
+
+	// field
+	ret += "\tfor i := byte(0); i < l; i++ {\n"
+	ret += "\t\ttg, err := bf.ReadTag()\n"
+	ret += "\t\tif err != nil {\n"
+	ret += "\t\t\treturn err\n"
+	ret += "\t\t}\n"
+	ret += "\t\tif _, err := bf.ReadDataType(); err != nil {\n"
+	ret += "\t\t\treturn err\n"
+	ret += "\t\t}\n\n"
+
+	ret += "\t\tswitch tg {\n"
+	for tg, pf := range ps.fieldList {
+		ret += fmt.Sprintf("\t\tcase byte(%v):\n", tg)
+		ret += pf.toGoReadDataBuf(1, pf.dataType, pf.subDataTypes, "d")
+		ret += fmt.Sprintf("\t\t\tst.%v = d1\n", upperFirstChar(pf.name))
+	}
+	ret += "\t\t}\n\n"
+	ret += "\t}\n"
+
+	ret += "\treturn nil\n"
+	ret += "}\n"
+	return ret
+}
+func (ps *stProtoStruct) toGoWriteFuncNewPerson() string {
+	var ret string
+	stName := upperFirstChar(ps.name)
+	ret += fmt.Sprintf("func New%v() *%v {\n", stName, stName)
+	ret += fmt.Sprintf("\treturn &%v{\n", stName)
+	for _, pf := range ps.fieldList {
+		ret += fmt.Sprintf("\t\t%v: %v,\n", upperFirstChar(pf.name), pf.toGoGetDefaultValue())
+	}
+	ret += "\t}\n"
+	ret += "}\n"
+	return ret
+}
+
+func (pf *stProtoField) toGoGetDefaultValue() string {
+	if pf.defaultValue != "" {
+		return pf.defaultValue
+	}
+
+	switch pf.dataType {
+	case Byte, Bool, Int, Long, Float, Double, String:
+		return toGoDefaultValueMap[pf.dataType]
+	case List, Map:
+		return fmt.Sprintf(toGoDefaultValueMap[pf.dataType], pf.toGoGetDataTypeStr(pf.dataType, pf.subDataTypes))
+	default:
+		return fmt.Sprintf(toGoDefaultValueMap[pf.dataType])
+	}
+}
+func (pf *stProtoField) toGoGetDataTypeStr(dt stProtocolType, sDts []stProtocolType) string {
+	switch dt {
+	case Byte, Bool, Int, Long, Float, Double, String:
+		return toGoDataTypeGoMap[dt]
+	case List:
+		return fmt.Sprintf(toGoDataTypeGoMap[dt], pf.toGoGetDataTypeStr(sDts[0], sDts[1:]))
+	case Map:
+		return fmt.Sprintf(toGoDataTypeGoMap[dt], pf.toGoGetDataTypeStr(sDts[0], []stProtocolType{}), pf.toGoGetDataTypeStr(sDts[1], sDts[2:]))
+	default:
+		return fmt.Sprintf(toGoDataTypeGoMap[dt], upperFirstChar(pf.subStructName))
+	}
+}
+func (pf *stProtoField) toGoWriteDataBuf(tbIdx int, tp stProtocolType, sTps []stProtocolType, forStr string) string {
+	var ret string
+	var tb string
+	for i:=0; i<tbIdx; i++ {
+		tb += "\t"
+	}
+
+	switch tp {
+	case Byte, Bool, Int, Long, Float, Double, String:
+		ret += fmt.Sprintf("%vif err := bf.WriteDataBuf(protocol.%v, %v); err != nil {\n", tb, toGoDataTypeStrMap[tp], forStr)
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+	case List:
+		// elem dataType
+		ret += fmt.Sprintf("%vif err := bf.WriteDataType(protocol.%v); err != nil {\n", tb, toGoDataTypeStrMap[sTps[0]])
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+		// length
+		ret += fmt.Sprintf("%vif err := bf.WriteLength(len(%v)); err != nil {\n", tb, forStr)
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+		// for [dataBuf]...
+		ret += fmt.Sprintf("%vfor _, e%v := range %v {\n", tb, tbIdx, forStr)
+		ret += pf.toGoWriteDataBuf(tbIdx+1, sTps[0], sTps[1:], fmt.Sprintf("e%v", tbIdx))
+		ret += fmt.Sprintf("%v}\n", tb)
+	case Map:
+		// key dataType
+		ret += fmt.Sprintf("%vif err := bf.WriteDataType(protocol.%v); err != nil {\n", tb, toGoDataTypeStrMap[sTps[0]])
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+		// value dataType
+		ret += fmt.Sprintf("%vif err := bf.WriteDataType(protocol.%v); err != nil {\n", tb, toGoDataTypeStrMap[sTps[1]])
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+		// length
+		ret += fmt.Sprintf("%vif err := bf.WriteLength(len(%v)); err != nil {\n", tb, forStr)
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+		// for [dataBuf]...
+		ret += fmt.Sprintf("%vfor k%v, v%v := range %v {\n", tb, tbIdx, tbIdx, forStr)
+		ret += pf.toGoWriteDataBuf(tbIdx+1, sTps[0], []stProtocolType{}, fmt.Sprintf("k%v", tbIdx))
+		ret += pf.toGoWriteDataBuf(tbIdx+1, sTps[1], sTps[2:], fmt.Sprintf("v%v", tbIdx))
+		ret += fmt.Sprintf("%v}\n", tb)
+	case Struct:
+		ret += fmt.Sprintf("%vif err := %v.WriteDataBuf(bf); err != nil {\n", tb, forStr)
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+	}
+
+	return ret
+}
+func (pf *stProtoField) toGoReadDataBuf(tbIdx int, tp stProtocolType, sTps []stProtocolType, forStr string) string {
+	var ret string
+	var tb string
+	for i:=0; i<tbIdx+2; i++ {
+		tb += "\t"
+	}
+	varName := fmt.Sprintf("%v%v", forStr, tbIdx)
+
+	switch tp {
+	case Byte, Bool, Int, Long, Float, Double, String:
+		ret += fmt.Sprintf("%v_%v, err := bf.ReadDataBuf(protocol.%v)\n", tb, varName, toGoDataTypeStrMap[tp])
+		ret += fmt.Sprintf("%vif err != nil {\n", tb)
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+		ret += fmt.Sprintf("%v%v, ok := _%v.(%v)\n", tb, varName, varName, toGoDataTypeGoMap[tp])
+		ret += fmt.Sprintf("%vif !ok {\n", tb)
+		ret += fmt.Sprintf("\t%vreturn errors.NewStError(1004)\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+	case List:
+		// init
+		ret += fmt.Sprintf("%v%v := make(%v, 0)\n", tb, varName, pf.toGoGetDataTypeStr(tp, sTps))
+		// elem dataType
+		ret += fmt.Sprintf("%vif _, err := bf.ReadDataType(); err != nil {\n", tb)
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+		// length
+		ret += fmt.Sprintf("%vl%v, err := bf.ReadLength()\n", tb, tbIdx)
+		ret += fmt.Sprintf("%vif err != nil {\n", tb)
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+		// for [dataBuf]...
+		ret += fmt.Sprintf("%vfor i%v:=0; i%v<l%v; i%v++ {\n", tb, tbIdx, tbIdx, tbIdx, tbIdx)
+		ret += pf.toGoReadDataBuf(tbIdx+1, sTps[0], sTps[1:], "e")
+		ret += fmt.Sprintf("\t%v%v = append(%v, e%v)\n", tb, varName, varName, tbIdx+1)
+		ret += fmt.Sprintf("%v}\n", tb)
+	case Map:
+		// init
+		ret += fmt.Sprintf("%v%v := make(%v)\n", tb, varName, pf.toGoGetDataTypeStr(tp, sTps))
+		// key dataType
+		ret += fmt.Sprintf("%vif _, err := bf.ReadDataType(); err != nil {\n", tb)
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+		// value dataType
+		ret += fmt.Sprintf("%vif _, err := bf.ReadDataType(); err != nil {\n", tb)
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+		// length
+		ret += fmt.Sprintf("%vl%v, err := bf.ReadLength()\n", tb, tbIdx)
+		ret += fmt.Sprintf("%vif err != nil {\n", tb)
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+		// for [dataBuf]...
+		ret += fmt.Sprintf("%vfor i%v:=0; i%v<l%v; i%v++ {\n", tb, tbIdx, tbIdx, tbIdx, tbIdx)
+		ret += pf.toGoReadDataBuf(tbIdx+1, sTps[0], []stProtocolType{}, "k")
+		ret += pf.toGoReadDataBuf(tbIdx+1, sTps[1], sTps[2:], "v")
+		ret += fmt.Sprintf("\t%v%v[k%v] = v%v\n", tb, varName, tbIdx+1, tbIdx+1)
+		ret += fmt.Sprintf("%v}\n", tb)
+	case Struct:
+		// init
+		ret += fmt.Sprintf("%v%v := New%v()\n", tb, varName, upperFirstChar(pf.subStructName))
+		// ReadDataBuf
+		ret += fmt.Sprintf("%vif err := %v.ReadDataBuf(bf); err != nil {\n", tb, varName)
+		ret += fmt.Sprintf("\t%vreturn err\n", tb)
+		ret += fmt.Sprintf("%v}\n", tb)
+	}
+
+	return ret
+}
+
+func upperFirstChar(s string) string {
+	return strings.ToUpper(s)[0:1]+s[1:]
 }
